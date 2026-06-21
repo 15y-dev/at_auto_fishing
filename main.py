@@ -7,6 +7,7 @@ import cv2
 import numpy as np
 import mss
 import time
+import keyboard
 from PIL import Image
 from datetime import datetime
 
@@ -26,11 +27,22 @@ SEARCH_REGION = {
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
+# キーマッピング（テンプレート名 → 押下するキー）
+KEY_MAPPING = {
+    '01.png': '1',
+    '02.png': '2',
+    '03.png': '3',
+    '04.png': '4'
+}
+
 # マッチング閾値 (0.0～1.0、高いほど厳密)
 THRESHOLD = 0.8
 
 # 検索間隔（秒）
 INTERVAL = 0.5
+
+# キー押下間隔（秒）
+KEY_PRESS_INTERVAL = 0.3
 
 # デバッグモード（Trueにすると詳細情報を表示）
 DEBUG = True
@@ -197,6 +209,11 @@ def main():
                 print("✓ テンプレート検索結果")
                 print("=" * 60)
                 
+                # 見つかったテンプレートをX座標（左から右）でソート
+                found_results = [r for r in results if r["found"]]
+                found_results.sort(key=lambda r: r['location'][0])
+                
+                # 全結果を表示
                 found_count = 0
                 for result in results:
                     if result["found"]:
@@ -215,6 +232,20 @@ def main():
                 print(f"検索回数: {iteration}回")
                 print(f"経過時間: {elapsed_time:.2f}秒")
                 print("=" * 60)
+                
+                # 左から順番にキーを押下
+                if found_results:
+                    print("\nキー押下処理:")
+                    for i, result in enumerate(found_results, 1):
+                        if result['template'] in KEY_MAPPING:
+                            key = KEY_MAPPING[result['template']]
+                            try:
+                                keyboard.press_and_release(key)
+                                print(f"  {i}. {result['template']} → キー '{key}' を押下しました (X={result['location'][0]})")
+                                time.sleep(KEY_PRESS_INTERVAL) # キー押下間隔
+                            except Exception as e:
+                                print(f"  {i}. {result['template']} → キー '{key}' の押下に失敗: {e}")
+                    print("=" * 60)
                 
                 # プログラム終了
                 return
