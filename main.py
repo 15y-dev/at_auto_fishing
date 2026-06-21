@@ -7,7 +7,8 @@ import cv2
 import numpy as np
 import mss
 import time
-import keyboard
+import win32api
+import win32con
 import ctypes
 import sys
 from PIL import Image
@@ -29,13 +30,18 @@ SEARCH_REGION = {
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
-# キーマッピング（テンプレート名 → 押下するキー）
-# テンキーを使用
+# キーマッピング（テンプレート名 → 仮想キーコード）
+# テンキーの仮想キーコードを使用
+VK_NUMPAD1 = 0x61
+VK_NUMPAD2 = 0x62
+VK_NUMPAD3 = 0x63
+VK_NUMPAD4 = 0x64
+
 KEY_MAPPING = {
-    '01.png': 'num 1',
-    '02.png': 'num 2',
-    '03.png': 'num 3',
-    '04.png': 'num 4'
+    '01.png': VK_NUMPAD1,
+    '02.png': VK_NUMPAD2,
+    '03.png': VK_NUMPAD3,
+    '04.png': VK_NUMPAD4
 }
 
 # マッチング閾値 (0.0～1.0、高いほど厳密)
@@ -154,6 +160,18 @@ def load_templates(template_paths):
     return templates
 
 
+def press_key_win32(vk_code):
+    """
+    Windows APIを使ってキーを押下（ハードウェアレベル）
+    
+    Args:
+        vk_code (int): 仮想キーコード
+    """
+    win32api.keybd_event(vk_code, 0, 0, 0)  # キー押下
+    time.sleep(0.05)
+    win32api.keybd_event(vk_code, 0, win32con.KEYEVENTF_KEYUP, 0)  # キー解放
+
+
 def is_admin():
     """
     管理者権限で実行されているかチェック
@@ -264,13 +282,13 @@ def main():
                     print("\nキー押下処理:")
                     for i, result in enumerate(found_results, 1):
                         if result['template'] in KEY_MAPPING:
-                            key = KEY_MAPPING[result['template']]
+                            vk_code = KEY_MAPPING[result['template']]
                             try:
-                                keyboard.press_and_release(key)
-                                print(f"  {i}. {result['template']} → キー '{key}' を押下しました (X={result['location'][0]})")
+                                press_key_win32(vk_code)
+                                print(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) を押下しました (X={result['location'][0]})")
                                 time.sleep(KEY_PRESS_INTERVAL) # キー押下間隔
                             except Exception as e:
-                                print(f"  {i}. {result['template']} → キー '{key}' の押下に失敗: {e}")
+                                print(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) の押下に失敗: {e}")
                     print("=" * 60)
                 
                 # プログラム終了
