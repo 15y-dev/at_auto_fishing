@@ -56,7 +56,7 @@ INTERVAL = 0.5
 BUTTON_PRESS_INTERVAL = 0.3
 
 # デバッグモード（Trueにすると詳細情報を表示）
-DEBUG = True
+DEBUG = False
 
 # ==============================================================
 
@@ -316,8 +316,10 @@ def main():
                                 tprint(f"  {i}. {result['template']} → {button_name} の押下に失敗: {e}")
                     tprint("=" * 60)
                 
-                # プログラム終了
-                return
+                # DEBUGモードがFalseの場合は無限ループ、Trueの場合は終了
+                if DEBUG:
+                    # プログラム終了
+                    return
             
             # 指定間隔待機
             time.sleep(INTERVAL)
