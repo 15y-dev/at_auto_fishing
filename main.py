@@ -8,6 +8,8 @@ import numpy as np
 import mss
 import time
 import keyboard
+import ctypes
+import sys
 from PIL import Image
 from datetime import datetime
 
@@ -28,11 +30,12 @@ SEARCH_REGION = {
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
 # キーマッピング（テンプレート名 → 押下するキー）
+# テンキーを使用
 KEY_MAPPING = {
-    '01.png': '1',
-    '02.png': '2',
-    '03.png': '3',
-    '04.png': '4'
+    '01.png': 'num 1',
+    '02.png': 'num 2',
+    '03.png': 'num 3',
+    '04.png': 'num 4'
 }
 
 # マッチング閾値 (0.0～1.0、高いほど厳密)
@@ -151,12 +154,35 @@ def load_templates(template_paths):
     return templates
 
 
+def is_admin():
+    """
+    管理者権限で実行されているかチェック
+    
+    Returns:
+        bool: 管理者権限で実行されている場合True
+    """
+    try:
+        return ctypes.windll.shell32.IsUserAnAdmin()
+    except:
+        return False
+
+
 def main():
     """
     メイン処理: 指定間隔で画面をキャプチャし、テンプレートを検索
     """
     print("=" * 60)
     print("テンプレートマッチング開始")
+    print("=" * 60)
+    
+    # 管理者権限チェック
+    if is_admin():
+        print("✓ 管理者権限で実行中")
+    else:
+        print("⚠ 警告: 管理者権限で実行されていません")
+        print("  キー入力が正常に動作しない可能性があります")
+        print("  run_admin.bat を使用して起動してください")
+    
     print("=" * 60)
     print(f"検索範囲: {SEARCH_REGION}")
     print(f"テンプレート: {TEMPLATES}")
