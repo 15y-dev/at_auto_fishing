@@ -7,10 +7,9 @@ import cv2
 import numpy as np
 import mss
 import time
-import win32api
-import win32con
 import ctypes
 import sys
+from ctypes import wintypes
 from PIL import Image
 from datetime import datetime
 
@@ -160,16 +159,65 @@ def load_templates(template_paths):
     return templates
 
 
-def press_key_win32(vk_code):
+# SendInput用の構造体定義
+class KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD)
+    ]
+
+class MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
+    ]
+
+class INPUT_UNION(ctypes.Union):
+    _fields_ = [
+        ("mi", MOUSEINPUT),
+        ("ki", KEYBDINPUT),
+        ("hi", HARDWAREINPUT)
+    ]
+
+class INPUT(ctypes.Structure):
+    _fields_ = [
+        ("type", wintypes.DWORD),
+        ("union", INPUT_UNION)
+    ]
+
+def press_key_sendinput(vk_code):
     """
-    Windows APIを使ってキーを押下（ハードウェアレベル）
+    SendInput APIを使ってキーを押下（より確実な方法）
     
     Args:
         vk_code (int): 仮想キーコード
     """
-    win32api.keybd_event(vk_code, 0, 0, 0)  # キー押下
+    # キー押下
+    extra = ctypes.c_ulong(0)
+    ii = INPUT()
+    ii.type = 1  # INPUT_KEYBOARD
+    ii.union.ki = KEYBDINPUT(vk_code, 0, 0, 0, ctypes.pointer(extra))
+    ctypes.windll.user32.SendInput(1, ctypes.byref(ii), ctypes.sizeof(ii))
+    
     time.sleep(0.05)
-    win32api.keybd_event(vk_code, 0, win32con.KEYEVENTF_KEYUP, 0)  # キー解放
+    
+    # キー解放
+    ii.union.ki.dwFlags = 0x0002  # KEYEVENTF_KEYUP
+    ctypes.windll.user32.SendInput(1, ctypes.byref(ii), ctypes.sizeof(ii))
 
 
 def is_admin():
@@ -279,12 +327,12 @@ def main():
                 
                 # 左から順番にキーを押下
                 if found_results:
-                    print("\nキー押下処理:")
+                    print("\nキー押下処理 (SendInput API):")
                     for i, result in enumerate(found_results, 1):
                         if result['template'] in KEY_MAPPING:
                             vk_code = KEY_MAPPING[result['template']]
                             try:
-                                press_key_win32(vk_code)
+                                press_key_sendinput(vk_code)
                                 print(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) を押下しました (X={result['location'][0]})")
                                 time.sleep(KEY_PRESS_INTERVAL) # キー押下間隔
                             except Exception as e:
