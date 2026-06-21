@@ -3,3 +3,4 @@ numpy
 mss
 Pillow
 pywin32
+vgamepad

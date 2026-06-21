@@ -9,6 +9,7 @@ import mss
 import time
 import ctypes
 import sys
+import vgamepad as vg
 from ctypes import wintypes
 from PIL import Image
 from datetime import datetime
@@ -29,18 +30,20 @@ SEARCH_REGION = {
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
-# キーマッピング（テンプレート名 → 仮想キーコード）
-# テンキーの仮想キーコードを使用
-VK_NUMPAD1 = 0x61
-VK_NUMPAD2 = 0x62
-VK_NUMPAD3 = 0x63
-VK_NUMPAD4 = 0x64
+# ボタンマッピング（テンプレート名 → Xboxコントローラーボタン）
+BUTTON_MAPPING = {
+    '01.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              # ボタン3
+    '02.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              # ボタン4
+    '03.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,  # ボタン5 (LB)
+    '04.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER  # ボタン6 (RB)
+}
 
-KEY_MAPPING = {
-    '01.png': VK_NUMPAD1,
-    '02.png': VK_NUMPAD2,
-    '03.png': VK_NUMPAD3,
-    '04.png': VK_NUMPAD4
+# ボタン名マッピング（表示用）
+BUTTON_NAMES = {
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_X: "ボタン3(X)",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_Y: "ボタン4(Y)",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER: "ボタン5(LB)",
+    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER: "ボタン6(RB)"
 }
 
 # マッチング閾値 (0.0～1.0、高いほど厳密)
@@ -49,8 +52,8 @@ THRESHOLD = 0.8
 # 検索間隔（秒）
 INTERVAL = 0.5
 
-# キー押下間隔（秒）
-KEY_PRESS_INTERVAL = 0.3
+# ボタン押下間隔（秒）
+BUTTON_PRESS_INTERVAL = 0.3
 
 # デバッグモード（Trueにすると詳細情報を表示）
 DEBUG = True
@@ -159,65 +162,19 @@ def load_templates(template_paths):
     return templates
 
 
-# SendInput用の構造体定義
-class KEYBDINPUT(ctypes.Structure):
-    _fields_ = [
-        ("wVk", wintypes.WORD),
-        ("wScan", wintypes.WORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
-    ]
-
-class HARDWAREINPUT(ctypes.Structure):
-    _fields_ = [
-        ("uMsg", wintypes.DWORD),
-        ("wParamL", wintypes.WORD),
-        ("wParamH", wintypes.WORD)
-    ]
-
-class MOUSEINPUT(ctypes.Structure):
-    _fields_ = [
-        ("dx", wintypes.LONG),
-        ("dy", wintypes.LONG),
-        ("mouseData", wintypes.DWORD),
-        ("dwFlags", wintypes.DWORD),
-        ("time", wintypes.DWORD),
-        ("dwExtraInfo", ctypes.POINTER(wintypes.ULONG))
-    ]
-
-class INPUT_UNION(ctypes.Union):
-    _fields_ = [
-        ("mi", MOUSEINPUT),
-        ("ki", KEYBDINPUT),
-        ("hi", HARDWAREINPUT)
-    ]
-
-class INPUT(ctypes.Structure):
-    _fields_ = [
-        ("type", wintypes.DWORD),
-        ("union", INPUT_UNION)
-    ]
-
-def press_key_sendinput(vk_code):
+def press_button(gamepad, button):
     """
-    SendInput APIを使ってキーを押下（より確実な方法）
+    仮想ゲームコントローラーのボタンを押下
     
     Args:
-        vk_code (int): 仮想キーコード
+        gamepad: vgamepadのゲームパッドオブジェクト
+        button: 押下するボタン
     """
-    # キー押下
-    extra = ctypes.c_ulong(0)
-    ii = INPUT()
-    ii.type = 1  # INPUT_KEYBOARD
-    ii.union.ki = KEYBDINPUT(vk_code, 0, 0, 0, ctypes.pointer(extra))
-    ctypes.windll.user32.SendInput(1, ctypes.byref(ii), ctypes.sizeof(ii))
-    
+    gamepad.press_button(button=button)
+    gamepad.update()
     time.sleep(0.05)
-    
-    # キー解放
-    ii.union.ki.dwFlags = 0x0002  # KEYEVENTF_KEYUP
-    ctypes.windll.user32.SendInput(1, ctypes.byref(ii), ctypes.sizeof(ii))
+    gamepad.release_button(button=button)
+    gamepad.update()
 
 
 def tprint(message):
@@ -270,6 +227,14 @@ def main():
     
     # テンプレート画像を事前に読み込み（グレースケール変換済み）
     templates = load_templates(TEMPLATES)
+    
+    # 仮想Xboxコントローラーを作成
+    try:
+        gamepad = vg.VX360Gamepad()
+        tprint("仮想Xboxコントローラーを作成しました")
+    except Exception as e:
+        tprint(f"エラー: 仮想コントローラーの作成に失敗: {e}")
+        return
     
     tprint("=" * 60)
     tprint(f"検索を開始します... (Ctrl+C で中断)")
@@ -336,18 +301,19 @@ def main():
                 tprint(f"経過時間: {elapsed_time:.2f}秒")
                 tprint("=" * 60)
                 
-                # 左から順番にキーを押下
+                # 左から順番にボタンを押下
                 if found_results:
-                    tprint("\nキー押下処理 (SendInput API):")
+                    tprint("\nボタン押下処理 (仮想ゲームコントローラー):")
                     for i, result in enumerate(found_results, 1):
-                        if result['template'] in KEY_MAPPING:
-                            vk_code = KEY_MAPPING[result['template']]
+                        if result['template'] in BUTTON_MAPPING:
+                            button = BUTTON_MAPPING[result['template']]
+                            button_name = BUTTON_NAMES.get(button, "不明")
                             try:
-                                press_key_sendinput(vk_code)
-                                tprint(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) を押下しました (X={result['location'][0]})")
-                                time.sleep(KEY_PRESS_INTERVAL) # キー押下間隔
+                                press_button(gamepad, button)
+                                tprint(f"  {i}. {result['template']} → {button_name} を押下しました (X={result['location'][0]})")
+                                time.sleep(BUTTON_PRESS_INTERVAL) # ボタン押下間隔
                             except Exception as e:
-                                tprint(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) の押下に失敗: {e}")
+                                tprint(f"  {i}. {result['template']} → {button_name} の押下に失敗: {e}")
                     tprint("=" * 60)
                 
                 # プログラム終了
