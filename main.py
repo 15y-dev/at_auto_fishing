@@ -220,6 +220,17 @@ def press_key_sendinput(vk_code):
     ctypes.windll.user32.SendInput(1, ctypes.byref(ii), ctypes.sizeof(ii))
 
 
+def tprint(message):
+    """
+    タイムスタンプ付きでprint
+    
+    Args:
+        message (str): 表示するメッセージ
+    """
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]  # ミリ秒まで表示
+    print(f"[{timestamp}] {message}")
+
+
 def is_admin():
     """
     管理者権限で実行されているかチェック
@@ -237,32 +248,32 @@ def main():
     """
     メイン処理: 指定間隔で画面をキャプチャし、テンプレートを検索
     """
-    print("=" * 60)
-    print("テンプレートマッチング開始")
-    print("=" * 60)
+    tprint("=" * 60)
+    tprint("テンプレートマッチング開始")
+    tprint("=" * 60)
     
     # 管理者権限チェック
     if is_admin():
-        print("✓ 管理者権限で実行中")
+        tprint("✓ 管理者権限で実行中")
     else:
-        print("⚠ 警告: 管理者権限で実行されていません")
-        print("  キー入力が正常に動作しない可能性があります")
-        print("  run_admin.bat を使用して起動してください")
+        tprint("⚠ 警告: 管理者権限で実行されていません")
+        tprint("  キー入力が正常に動作しない可能性があります")
+        tprint("  run_admin.bat を使用して起動してください")
     
-    print("=" * 60)
-    print(f"検索範囲: {SEARCH_REGION}")
-    print(f"テンプレート: {TEMPLATES}")
-    print(f"マッチング閾値: {THRESHOLD}")
-    print(f"検索間隔: {INTERVAL}秒")
-    print("=" * 60)
-    print()
+    tprint("=" * 60)
+    tprint(f"検索範囲: {SEARCH_REGION}")
+    tprint(f"テンプレート: {TEMPLATES}")
+    tprint(f"マッチング閾値: {THRESHOLD}")
+    tprint(f"検索間隔: {INTERVAL}秒")
+    tprint("=" * 60)
+    tprint("")
     
     # テンプレート画像を事前に読み込み（グレースケール変換済み）
     templates = load_templates(TEMPLATES)
     
-    print("=" * 60)
-    print(f"検索を開始します... (Ctrl+C で中断)")
-    print("=" * 60)
+    tprint("=" * 60)
+    tprint(f"検索を開始します... (Ctrl+C で中断)")
+    tprint("=" * 60)
     
     start_time = datetime.now()
     iteration = 0
@@ -272,7 +283,7 @@ def main():
             iteration += 1
             
             if DEBUG:
-                print(f"\n[{iteration}回目] {datetime.now().strftime('%H:%M:%S')} - 検索中...")
+                tprint(f"\n[{iteration}回目] - 検索中...")
             
             # 画面をキャプチャ
             screen = capture_screen(SEARCH_REGION)
@@ -287,7 +298,7 @@ def main():
                 results.append(result)
                 
                 if DEBUG and result["confidence"] > 0.5:
-                    print(f"  {template_path}: 信頼度 {result['confidence']:.2%}")
+                    tprint(f"  {template_path}: 信頼度 {result['confidence']:.2%}")
                 
                 # 1つでも見つかったかフラグを立てる
                 if result["found"]:
@@ -297,9 +308,9 @@ def main():
             if found_any:
                 elapsed_time = (datetime.now() - start_time).total_seconds()
                 
-                print("\n" + "=" * 60)
-                print("✓ テンプレート検索結果")
-                print("=" * 60)
+                tprint("\n" + "=" * 60)
+                tprint("✓ テンプレート検索結果")
+                tprint("=" * 60)
                 
                 # 見つかったテンプレートをX座標（左から右）でソート
                 found_results = [r for r in results if r["found"]]
@@ -312,32 +323,32 @@ def main():
                         found_count += 1
                         abs_x = result['location'][0] + SEARCH_REGION['left']
                         abs_y = result['location'][1] + SEARCH_REGION['top']
-                        print(f"✓ {result['template']}: 見つかりました")
-                        print(f"   座標: X={abs_x}, Y={abs_y}")
-                        print(f"   (検索範囲内の相対座標: X={result['location'][0]}, Y={result['location'][1]})")
-                        print(f"   信頼度: {result['confidence']:.2%}")
+                        tprint(f"✓ {result['template']}: 見つかりました")
+                        tprint(f"   座標: X={abs_x}, Y={abs_y}")
+                        tprint(f"   (検索範囲内の相対座標: X={result['location'][0]}, Y={result['location'][1]})")
+                        tprint(f"   信頼度: {result['confidence']:.2%}")
                     else:
-                        print(f"✗ {result['template']}: 見つかりませんでした")
+                        tprint(f"✗ {result['template']}: 見つかりませんでした")
                 
-                print("-" * 60)
-                print(f"見つかったテンプレート数: {found_count}/{len(TEMPLATES)}")
-                print(f"検索回数: {iteration}回")
-                print(f"経過時間: {elapsed_time:.2f}秒")
-                print("=" * 60)
+                tprint("-" * 60)
+                tprint(f"見つかったテンプレート数: {found_count}/{len(TEMPLATES)}")
+                tprint(f"検索回数: {iteration}回")
+                tprint(f"経過時間: {elapsed_time:.2f}秒")
+                tprint("=" * 60)
                 
                 # 左から順番にキーを押下
                 if found_results:
-                    print("\nキー押下処理 (SendInput API):")
+                    tprint("\nキー押下処理 (SendInput API):")
                     for i, result in enumerate(found_results, 1):
                         if result['template'] in KEY_MAPPING:
                             vk_code = KEY_MAPPING[result['template']]
                             try:
                                 press_key_sendinput(vk_code)
-                                print(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) を押下しました (X={result['location'][0]})")
+                                tprint(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) を押下しました (X={result['location'][0]})")
                                 time.sleep(KEY_PRESS_INTERVAL) # キー押下間隔
                             except Exception as e:
-                                print(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) の押下に失敗: {e}")
-                    print("=" * 60)
+                                tprint(f"  {i}. {result['template']} → キー (VK={hex(vk_code)}) の押下に失敗: {e}")
+                    tprint("=" * 60)
                 
                 # プログラム終了
                 return
@@ -346,13 +357,13 @@ def main():
             time.sleep(INTERVAL)
     
     except KeyboardInterrupt:
-        print("\n\n検索を中断しました")
+        tprint("\n\n検索を中断しました")
         elapsed_time = (datetime.now() - start_time).total_seconds()
-        print(f"検索回数: {iteration}回")
-        print(f"経過時間: {elapsed_time:.2f}秒")
+        tprint(f"検索回数: {iteration}回")
+        tprint(f"経過時間: {elapsed_time:.2f}秒")
     
     except Exception as e:
-        print(f"\nエラーが発生しました: {e}")
+        tprint(f"\nエラーが発生しました: {e}")
         import traceback
         traceback.print_exc()
 
