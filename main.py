@@ -50,7 +50,7 @@ BUTTON_NAMES = {
 THRESHOLD = 0.8
 
 # 検索間隔（秒）
-INTERVAL = 0.5
+INTERVAL = 1.0
 
 # ボタン押下間隔（秒）
 BUTTON_PRESS_INTERVAL = 0.3
