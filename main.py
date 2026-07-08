@@ -16,16 +16,28 @@ from datetime import datetime
 
 # ==================== 設定 (Configuration) ====================
 
-# 検索範囲の設定 (Search Region)
-# 形式: {"top": y座標, "left": x座標, "width": 幅, "height": 高さ}
-# 例: {"top": 100, "left": 100, "width": 800, "height": 600}
-# 画面全体を検索する場合は、monitor=1 を使用
-SEARCH_REGION = {
-    "top": 700,      # 上端のY座標
-    "left": 740,     # 左端のX座標
-    "width": 460,    # 幅
-    "height": 50    # 高さ
-}
+# 検索範囲の設定 (Search Regions)
+# top / width / height は全範囲共通のため配列の外で定義
+REGION_TOP = 710       # 上端のY座標（共通）
+REGION_WIDTH = 50      # 幅（共通）
+REGION_HEIGHT = 50     # 高さ（共通）
+
+# left のみ範囲ごとに異なる（左から順に登録すること）
+SEARCH_REGIONS_LEFT = [
+    # 0,  # 範囲1
+    750,  # 範囲2
+    # 0,  # 範囲3
+    940,  # 範囲4
+    # 0,  # 範囲5
+    1125,  # 範囲6
+    # 0,  # 範囲7
+]
+
+# 各範囲の完全な辞書を生成
+SEARCH_REGIONS = [
+    {"top": REGION_TOP, "left": left, "width": REGION_WIDTH, "height": REGION_HEIGHT}
+    for left in SEARCH_REGIONS_LEFT
+]
 
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
@@ -71,7 +83,7 @@ def capture_screen(region):
     Returns:
         numpy.ndarray: キャプチャした画像（BGR形式）
     """
-    with mss.mss() as sct:
+    with mss.MSS() as sct:
         # スクリーンショットを取得
         screenshot = sct.grab(region)
         
@@ -82,6 +94,45 @@ def capture_screen(region):
         img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
         
         return img_cv
+
+
+def calculate_capture_region(regions):
+    """
+    複数の検索範囲を全て含む、最小のキャプチャ範囲を計算する
+    
+    Args:
+        regions (list): 検索範囲のリスト [{"top", "left", "width", "height"}, ...]
+    
+    Returns:
+        dict: 全範囲を包含するキャプチャ範囲 {"top", "left", "width", "height"}
+    """
+    left = min(r['left'] for r in regions)
+    top = min(r['top'] for r in regions)
+    right = max(r['left'] + r['width'] for r in regions)
+    bottom = max(r['top'] + r['height'] for r in regions)
+    return {
+        "left": left,
+        "top": top,
+        "width": right - left,
+        "height": bottom - top
+    }
+
+
+def crop_region(screen, capture_region, region):
+    """
+    大元のキャプチャ画像から、指定範囲を切り出す
+    
+    Args:
+        screen (numpy.ndarray): capture_regionでキャプチャした画像
+        capture_region (dict): screenのキャプチャ範囲
+        region (dict): 切り出したい範囲（絶対座標）
+    
+    Returns:
+        numpy.ndarray: 切り出した画像
+    """
+    rel_left = region['left'] - capture_region['left']
+    rel_top = region['top'] - capture_region['top']
+    return screen[rel_top:rel_top + region['height'], rel_left:rel_left + region['width']]
 
 
 def find_template(screen, template, template_name, threshold=0.8):
@@ -217,8 +268,12 @@ def main():
         tprint("  キー入力が正常に動作しない可能性があります")
         tprint("  run_admin.bat を使用して起動してください")
     
+    # 全範囲を包含するキャプチャ範囲を計算
+    capture_region = calculate_capture_region(SEARCH_REGIONS)
+    
     tprint("=" * 60)
-    tprint(f"検索範囲: {SEARCH_REGION}")
+    tprint(f"検索範囲数: {len(SEARCH_REGIONS)}")
+    tprint(f"キャプチャ範囲: {capture_region}")
     tprint(f"テンプレート: {TEMPLATES}")
     tprint(f"マッチング閾値: {THRESHOLD}")
     tprint(f"検索間隔: {INTERVAL}秒")
@@ -250,76 +305,44 @@ def main():
             if DEBUG:
                 tprint(f"\n[{iteration}回目] - 検索中...")
             
-            # 画面をキャプチャ
-            screen = capture_screen(SEARCH_REGION)
+            # 大元のキャプチャは1回だけ（一時的な失敗はスキップして継続）
+            try:
+                screen = capture_screen(capture_region)
+            except Exception as e:
+                tprint(f"⚠ 画面キャプチャに失敗しました（スキップして継続）: {e}")
+                time.sleep(INTERVAL)
+                continue
             
-            # 全テンプレートの検索結果を格納
-            results = []
-            found_any = False
-            
-            # 各テンプレートを順次チェック
-            for template_path, template_img in templates.items():
-                result = find_template(screen, template_img, template_path, THRESHOLD)
-                results.append(result)
+            # 各範囲を登録順（左から右）に処理
+            for region_index, region in enumerate(SEARCH_REGIONS, 1):
+                # この範囲を切り出す
+                sub_screen = crop_region(screen, capture_region, region)
                 
-                if DEBUG and result["confidence"] > 0.5:
-                    tprint(f"  {template_path}: 信頼度 {result['confidence']:.2%}")
-                
-                # 1つでも見つかったかフラグを立てる
-                if result["found"]:
-                    found_any = True
-            
-            # 1つでも見つかった場合、全結果を表示して終了
-            if found_any:
-                elapsed_time = (datetime.now() - start_time).total_seconds()
-                
-                tprint("\n" + "=" * 60)
-                tprint("✓ テンプレート検索結果")
-                tprint("=" * 60)
-                
-                # 見つかったテンプレートをX座標（左から右）でソート
-                found_results = [r for r in results if r["found"]]
-                found_results.sort(key=lambda r: r['location'][0])
-                
-                # 全結果を表示
-                found_count = 0
-                for result in results:
+                # 各テンプレートを順次チェック
+                for template_path, template_img in templates.items():
+                    result = find_template(sub_screen, template_img, template_path, THRESHOLD)
+                    
+                    if DEBUG and result["confidence"] > 0.5:
+                        tprint(f"  範囲{region_index} {template_path}: 信頼度 {result['confidence']:.2%}")
+                        # デバッグ用: 信頼度が閾値を超えた場合のみ切り出し画像を保存
+                        cv2.imwrite(f"debug_region_{region_index}_{iteration}.png", sub_screen)
+                    
                     if result["found"]:
-                        found_count += 1
-                        abs_x = result['location'][0] + SEARCH_REGION['left']
-                        abs_y = result['location'][1] + SEARCH_REGION['top']
-                        tprint(f"✓ {result['template']}: 見つかりました")
-                        tprint(f"   座標: X={abs_x}, Y={abs_y}")
-                        tprint(f"   (検索範囲内の相対座標: X={result['location'][0]}, Y={result['location'][1]})")
-                        tprint(f"   信頼度: {result['confidence']:.2%}")
-                    else:
-                        tprint(f"✗ {result['template']}: 見つかりませんでした")
-                
-                tprint("-" * 60)
-                tprint(f"見つかったテンプレート数: {found_count}/{len(TEMPLATES)}")
-                tprint(f"検索回数: {iteration}回")
-                tprint(f"経過時間: {elapsed_time:.2f}秒")
-                tprint("=" * 60)
-                
-                # 左から順番にボタンを押下
-                if found_results:
-                    tprint("\nボタン押下処理 (仮想ゲームコントローラー):")
-                    for i, result in enumerate(found_results, 1):
-                        if result['template'] in BUTTON_MAPPING:
-                            button = BUTTON_MAPPING[result['template']]
+                        # 見つかったらすぐにボタン押下
+                        if template_path in BUTTON_MAPPING:
+                            button = BUTTON_MAPPING[template_path]
                             button_name = BUTTON_NAMES.get(button, "不明")
+                            abs_x = result['location'][0] + region['left']
+                            abs_y = result['location'][1] + region['top']
                             try:
                                 press_button(gamepad, button)
-                                tprint(f"  {i}. {result['template']} → {button_name} を押下しました (X={result['location'][0]})")
-                                time.sleep(BUTTON_PRESS_INTERVAL) # ボタン押下間隔
+                                tprint(f"範囲{region_index}: {template_path} → {button_name} を押下しました "
+                                       f"(座標: X={abs_x}, Y={abs_y}, 信頼度: {result['confidence']:.2%})")
+                                time.sleep(BUTTON_PRESS_INTERVAL)  # ボタン押下間隔
                             except Exception as e:
-                                tprint(f"  {i}. {result['template']} → {button_name} の押下に失敗: {e}")
-                    tprint("=" * 60)
-                
-                # DEBUGモードがFalseの場合は無限ループ、Trueの場合は終了
-                if DEBUG:
-                    # プログラム終了
-                    return
+                                tprint(f"範囲{region_index}: {template_path} → {button_name} の押下に失敗: {e}")
+                        # この範囲では1つ見つかったら次の範囲へ
+                        break
             
             # 指定間隔待機
             time.sleep(INTERVAL)
