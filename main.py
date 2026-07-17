@@ -11,7 +11,6 @@ import ctypes
 import sys
 import vgamepad as vg
 from ctypes import wintypes
-from PIL import Image
 from datetime import datetime
 
 # ==================== 設定 (Configuration) ====================
@@ -65,35 +64,35 @@ THRESHOLD = 0.8
 INTERVAL = 1.0
 
 # ボタン押下間隔（秒）
-BUTTON_PRESS_INTERVAL = 0.3
+BUTTON_PRESS_INTERVAL = 0.1
+
 
 # デバッグモード（Trueにすると詳細情報を表示）
 DEBUG = False
 
 # ==============================================================
 
+# mssインスタンスはプログラム実行時に1回だけ生成し、グローバル変数で保持する
+# （毎フレーム生成すると生成コストがかかるため）
+_sct = None
+
 
 def capture_screen(region):
     """
     指定範囲の画面をキャプチャする
-    
     Args:
         region (dict): キャプチャする範囲 {"top", "left", "width", "height"}
-    
     Returns:
         numpy.ndarray: キャプチャした画像（BGR形式）
     """
-    with mss.MSS() as sct:
-        # スクリーンショットを取得
-        screenshot = sct.grab(region)
-        
-        # PIL Image に変換
-        img = Image.frombytes('RGB', screenshot.size, screenshot.rgb)
-        
-        # OpenCV形式（BGR）に変換
-        img_cv = cv2.cvtColor(np.array(img), cv2.COLOR_RGB2BGR)
-        
-        return img_cv
+    # グローバルで保持しているmssインスタンスを再利用（毎回の生成コストを削減）
+    screenshot = _sct.grab(region)
+
+    # mssはBGRA形式でバッファを返すため、PIL変換を挟まずBGRを直接取り出す
+    img_bgra = np.array(screenshot)
+    img_cv = img_bgra[:, :, :3]
+
+    return img_cv
 
 
 def calculate_capture_region(regions):
@@ -256,9 +255,14 @@ def main():
     """
     メイン処理: 指定間隔で画面をキャプチャし、テンプレートを検索
     """
+    global _sct
+
     tprint("=" * 60)
     tprint("テンプレートマッチング開始")
     tprint("=" * 60)
+
+    # mssインスタンスをプログラム実行時に1回だけ生成（毎フレームの生成コストを削減）
+    _sct = mss.mss()
     
     # 管理者権限チェック
     if is_admin():
