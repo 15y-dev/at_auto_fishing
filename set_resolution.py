@@ -12,7 +12,7 @@ import pywintypes
 import win32api
 import win32con
 
-WIDTH, HEIGHT = 1920, 1280
+WIDTH, HEIGHT = 1920, 1200
 LOG = os.path.join(os.path.dirname(os.path.abspath(__file__)), "resolution_log.txt")
 
 
