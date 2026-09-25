@@ -373,13 +373,16 @@ def main():
         tprint("  run_admin.bat を使用して起動してください")
 
     # 対象プログラムのウィンドウを検索
+    # 見つからなくてもプログラムは終了せず、ループ内で再検索を続ける
     tprint(f"対象プログラム '{TARGET_PROCESS_NAME}' のウィンドウを検索中...")
     hwnd = find_hwnd_by_process_name(TARGET_PROCESS_NAME)
     if hwnd is None:
-        tprint(f"エラー: プロセス '{TARGET_PROCESS_NAME}' のウィンドウが見つかりませんでした")
-        tprint("  対象プログラムが起動しているか確認してください")
-        return
-    tprint(f"✓ ウィンドウを検出しました (HWND: {hwnd})")
+        tprint(f"⚠ プロセス '{TARGET_PROCESS_NAME}' のウィンドウが見つかりませんでした")
+        tprint("  対象プログラムの起動待ちとして、このまま再検索を続けます")
+        tprint("  （終了する場合は Ctrl+C を押してください）")
+    else:
+        tprint(f"✓ ウィンドウを検出しました (HWND: {hwnd})")
+
     
     tprint("=" * 60)
     tprint(f"対象プロセス: {TARGET_PROCESS_NAME}")
