@@ -3,6 +3,7 @@
 Template Matching Program for Screen Region
 """
 
+import os
 import cv2
 import numpy as np
 import mss
@@ -10,30 +11,41 @@ import time
 import ctypes
 import sys
 import vgamepad as vg
+import win32gui
+import win32process
+import win32api
+import win32con
 from ctypes import wintypes
 from datetime import datetime
 
 # ==================== 設定 (Configuration) ====================
 
+# キャプチャ対象プログラムの実行ファイル名（プロセス名）
+# 指定したプロセスのウィンドウ左上（クライアント領域）を原点(0,0)とした
+# 相対座標で以下の検索範囲を指定する
+TARGET_PROCESS_NAME = "game.bin"
+
 # 検索範囲の設定 (Search Regions)
+# ここで指定する座標・サイズは、TARGET_PROCESS_NAME のウィンドウ左上からの
+# 相対座標（クライアント座標）である点に注意
 # top / width / height は全範囲共通のため配列の外で定義
-REGION_TOP = 710       # 上端のY座標（共通）
+REGION_TOP = 605       # 上端のY座標（対象ウィンドウ左上からの相対値・共通）
 REGION_WIDTH = 50      # 幅（共通）
 REGION_HEIGHT = 50     # 高さ（共通）
 
-# left のみ範囲ごとに異なる（左から順に登録すること）
+# left のみ範囲ごとに異なる（左から順に登録すること・対象ウィンドウ左上からの相対値）
 SEARCH_REGIONS_LEFT = [
-    650,  # 範囲1
-    750,  # 範囲2
-    850,  # 範囲3
-    940,  # 範囲4
-    1035,  # 範囲5
-    1125,  # 範囲6
-    1220,  # 範囲7
+    330,  # 範囲1
+    430,  # 範囲2
+    530,  # 範囲3
+    620,  # 範囲4
+    715,  # 範囲5
+    805,  # 範囲6
+    900,  # 範囲7
 ]
 
-# 各範囲の完全な辞書を生成
-SEARCH_REGIONS = [
+# 各範囲の完全な辞書を生成（相対座標のまま保持）
+SEARCH_REGIONS_RELATIVE = [
     {"top": REGION_TOP, "left": left, "width": REGION_WIDTH, "height": REGION_HEIGHT}
     for left in SEARCH_REGIONS_LEFT
 ]
@@ -251,6 +263,94 @@ def is_admin():
         return False
 
 
+class _FoundWindow(Exception):
+    """
+    EnumWindows のコールバック内から列挙を早期終了させるための内部例外
+    """
+    def __init__(self, hwnd):
+        super().__init__()
+        self.hwnd = hwnd
+
+
+def find_hwnd_by_process_name(process_name):
+    """
+    指定した実行ファイル名（プロセス名）を持つプロセスの
+    可視ウィンドウのハンドル(HWND)を検索する
+    
+    Args:
+        process_name (str): 実行ファイル名 (例: "game.bin")
+    
+    Returns:
+        int または None: 見つかったウィンドウハンドル。見つからない場合はNone
+    """
+    def callback(hwnd, _):
+        # 非表示ウィンドウ・タイトル無しウィンドウは対象外
+        if not win32gui.IsWindowVisible(hwnd):
+            return True
+        if not win32gui.GetWindowText(hwnd):
+            return True
+
+        try:
+            _, pid = win32process.GetWindowThreadProcessId(hwnd)
+            h_process = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ,
+                False, pid
+            )
+            exe_path = win32process.GetModuleFileNameEx(h_process, 0)
+            win32api.CloseHandle(h_process)
+        except Exception:
+            # アクセス権が無い等で取得できないウィンドウは無視して続行
+            return True
+
+        if os.path.basename(exe_path).lower() == process_name.lower():
+            raise _FoundWindow(hwnd)
+        return True
+
+    try:
+        win32gui.EnumWindows(callback, None)
+    except _FoundWindow as found:
+        return found.hwnd
+
+    return None
+
+
+def get_window_client_origin(hwnd):
+    """
+    指定ウィンドウのクライアント領域左上を、スクリーン座標に変換して取得する
+    
+    Args:
+        hwnd (int): ウィンドウハンドル
+    
+    Returns:
+        tuple: (screen_x, screen_y)
+    """
+    return win32gui.ClientToScreen(hwnd, (0, 0))
+
+
+def resolve_absolute_regions(regions_relative, origin):
+    """
+    対象ウィンドウ左上からの相対座標で定義された検索範囲を、
+    現在のウィンドウ位置に基づく画面上の絶対座標に変換する
+    
+    Args:
+        regions_relative (list): 相対座標の検索範囲リスト
+        origin (tuple): 対象ウィンドウのクライアント領域左上のスクリーン座標 (x, y)
+    
+    Returns:
+        list: 絶対座標に変換された検索範囲リスト
+    """
+    origin_x, origin_y = origin
+    return [
+        {
+            "top": origin_y + r["top"],
+            "left": origin_x + r["left"],
+            "width": r["width"],
+            "height": r["height"],
+        }
+        for r in regions_relative
+    ]
+
+
 def main():
     """
     メイン処理: 指定間隔で画面をキャプチャし、テンプレートを検索
@@ -271,13 +371,19 @@ def main():
         tprint("⚠ 警告: 管理者権限で実行されていません")
         tprint("  キー入力が正常に動作しない可能性があります")
         tprint("  run_admin.bat を使用して起動してください")
-    
-    # 全範囲を包含するキャプチャ範囲を計算
-    capture_region = calculate_capture_region(SEARCH_REGIONS)
+
+    # 対象プログラムのウィンドウを検索
+    tprint(f"対象プログラム '{TARGET_PROCESS_NAME}' のウィンドウを検索中...")
+    hwnd = find_hwnd_by_process_name(TARGET_PROCESS_NAME)
+    if hwnd is None:
+        tprint(f"エラー: プロセス '{TARGET_PROCESS_NAME}' のウィンドウが見つかりませんでした")
+        tprint("  対象プログラムが起動しているか確認してください")
+        return
+    tprint(f"✓ ウィンドウを検出しました (HWND: {hwnd})")
     
     tprint("=" * 60)
-    tprint(f"検索範囲数: {len(SEARCH_REGIONS)}")
-    tprint(f"キャプチャ範囲: {capture_region}")
+    tprint(f"対象プロセス: {TARGET_PROCESS_NAME}")
+    tprint(f"検索範囲数: {len(SEARCH_REGIONS_RELATIVE)}")
     tprint(f"テンプレート: {TEMPLATES}")
     tprint(f"マッチング閾値: {THRESHOLD}")
     tprint(f"検索間隔: {INTERVAL}秒")
@@ -308,6 +414,26 @@ def main():
             
             if DEBUG:
                 tprint(f"\n[{iteration}回目] - 検索中...")
+
+            # 対象ウィンドウがまだ存在するか確認
+            if not win32gui.IsWindow(hwnd):
+                tprint("⚠ 対象ウィンドウが見つからなくなりました。再検索します...")
+                hwnd = find_hwnd_by_process_name(TARGET_PROCESS_NAME)
+                if hwnd is None:
+                    tprint(f"⚠ プロセス '{TARGET_PROCESS_NAME}' が見つかりません（スキップして継続）")
+                    time.sleep(INTERVAL)
+                    continue
+
+            # ウィンドウ左上（クライアント領域）のスクリーン座標を取得し、
+            # 相対座標の検索範囲を絶対座標に変換する（ウィンドウ移動に追従）
+            try:
+                origin = get_window_client_origin(hwnd)
+                search_regions = resolve_absolute_regions(SEARCH_REGIONS_RELATIVE, origin)
+                capture_region = calculate_capture_region(search_regions)
+            except Exception as e:
+                tprint(f"⚠ ウィンドウ座標の取得に失敗しました（スキップして継続）: {e}")
+                time.sleep(INTERVAL)
+                continue
             
             # 大元のキャプチャは1回だけ（一時的な失敗はスキップして継続）
             try:
@@ -318,7 +444,8 @@ def main():
                 continue
             
             # 各範囲を登録順（左から右）に処理
-            for region_index, region in enumerate(SEARCH_REGIONS, 1):
+            for region_index, region in enumerate(search_regions, 1):
+
                 # この範囲を切り出す
                 sub_screen = crop_region(screen, capture_region, region)
                 
