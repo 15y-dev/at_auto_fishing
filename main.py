@@ -25,6 +25,9 @@ from datetime import datetime
 # 相対座標で以下の検索範囲を指定する
 TARGET_PROCESS_NAME = "game.bin"
 
+# 1280x1024 のウィンドウを想定しているため、ウィンドウサイズが異なる場合は
+# SEARCH_REGIONS_LEFT の値を調整する必要がある
+
 # 検索範囲の設定 (Search Regions)
 # ここで指定する座標・サイズは、TARGET_PROCESS_NAME のウィンドウ左上からの
 # 相対座標（クライアント座標）である点に注意
