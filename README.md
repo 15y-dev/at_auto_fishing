@@ -72,6 +72,21 @@ run_admin.bat
 
 プログラムを途中で停止したい場合は、`Ctrl + C` を押してください。
 
+## 🎮 数字の送信（Raspberry Pi Pico）
+
+テンプレートが見つかると、`NUMBER_MAPPING` に従った数字（`01.png`→`1` … `04.png`→`4`）を
+Raspberry Pi Pico のデータ用USBシリアルへ送信します。Pico は受け取った数字を
+USBキーボードの数字キー入力としてPCへ送ります（`pico/code.py`）。
+
+- Pico は CircuitPython で動作し、`boot.py` で `usb_cdc.enable(console=True, data=True)` を設定済みであること
+  （コンソール用とデータ用の2つのCOMポートが見える状態）
+- `pico/code.py` を Pico の `CIRCUITPY` ドライブ直下の `code.py` にコピーしてください
+- COM番号は固定していません。起動時に USB の VID/PID（`PICO_VID` / `PICO_PID`）から
+  Pico のデータ用ポート（2本のうちインターフェース番号が大きい方）を自動検出します
+- シリアルポートは起動時に1回だけ開き、開いたまま使い回します（毎回の接続・切断による遅延を避けるため）。
+  送信に失敗した場合のみ再検出して再接続します
+- 送信する数字を変えたい場合は `main.py` の `NUMBER_MAPPING` を編集してください
+
 ## 📁 ファイル構成
 
 ```
@@ -79,6 +94,8 @@ at_auto_fishing/
 ├── main.py              # メインプログラム
 ├── run.bat              # 通常起動スクリプト
 ├── run_admin.bat        # 管理者権限起動スクリプト
+├── pico/code.py         # Pico用プログラム（受信した数字をUSBキーボード入力に変換）
+├── pico/blink_backup.py # Picoに元々入っていたLED点滅プログラムのバックアップ
 ├── requirements.txt     # 必要なライブラリ一覧
 ├── README.md            # このファイル
 ├── 01.png               # テンプレート画像1
@@ -165,6 +182,7 @@ at_auto_fishing/
 - `numpy`: 数値計算
 - `mss`: 高速スクリーンキャプチャ
 - `Pillow`: 画像処理補助
+- `pyserial`: Raspberry Pi Pico とのUSBシリアル通信
 
 ## 📄 ライセンス
 

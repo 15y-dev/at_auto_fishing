@@ -10,7 +10,9 @@ import mss
 import time
 import ctypes
 import sys
-import vgamepad as vg
+import re
+import serial
+import serial.tools.list_ports
 import win32gui
 import win32process
 import win32api
@@ -56,20 +58,21 @@ SEARCH_REGIONS_RELATIVE = [
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
-# ボタンマッピング（テンプレート名 → Xboxコントローラーボタン）
-BUTTON_MAPPING = {
-    '01.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_X,              # ボタン3
-    '02.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_Y,              # ボタン4
-    '03.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER,  # ボタン5 (LB)
-    '04.png': vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER  # ボタン6 (RB)
-}
+# Raspberry Pi Pico（CircuitPython）の検出設定
+# COM番号は環境によって変わるため固定せず、USBのVID/PIDから実行時に自動検出する
+# （CircuitPython の Raspberry Pi Pico: VID=0x239A / PID=0x80F4）
+PICO_VID = 0x239A
+PICO_PID = 0x80F4
+# 接続を試みるシリアルのボーレート（USB CDCでは実質無視されるがpyserialの引数として必要）
+PICO_BAUDRATE = 115200
 
-# ボタン名マッピング（表示用）
-BUTTON_NAMES = {
-    vg.XUSB_BUTTON.XUSB_GAMEPAD_X: "ボタン3(X)",
-    vg.XUSB_BUTTON.XUSB_GAMEPAD_Y: "ボタン4(Y)",
-    vg.XUSB_BUTTON.XUSB_GAMEPAD_LEFT_SHOULDER: "ボタン5(LB)",
-    vg.XUSB_BUTTON.XUSB_GAMEPAD_RIGHT_SHOULDER: "ボタン6(RB)"
+# 送信する数字のマッピング（テンプレート名 → Picoへ送る数字 '0'～'9' の1文字）
+# Pico側がこの数字をUSBキーボード入力としてPCに送信する（pico/code.py）
+NUMBER_MAPPING = {
+    '01.png': '1',
+    '02.png': '2',
+    '03.png': '3',
+    '04.png': '4',
 }
 
 # マッチング閾値 (0.0～1.0、高いほど厳密)
@@ -227,19 +230,101 @@ def load_templates(template_paths):
     return templates
 
 
-def press_button(gamepad, button):
+def _port_interface_number(port_info):
     """
-    仮想ゲームコントローラーのボタンを押下
+    複合USBデバイスのシリアルポートについて、USBインターフェース番号を取得する
+    （CircuitPython では コンソール < データ の順に番号が割り当てられる）
     
     Args:
-        gamepad: vgamepadのゲームパッドオブジェクト
-        button: 押下するボタン
+        port_info: serial.tools.list_ports の ListPortInfo
+    
+    Returns:
+        int: インターフェース番号。取得できない場合は COM番号で代用
     """
-    gamepad.press_button(button=button)
-    gamepad.update()
-    time.sleep(0.05)
-    gamepad.release_button(button=button)
-    gamepad.update()
+    # pyserial(Windows) は複合デバイスの location に ":x.<インターフェース番号>" を付ける
+    match = re.search(r":x\.(\d+)", port_info.location or "")
+    if match:
+        return int(match.group(1))
+    # 取得できない場合は、COM番号の大小で代用（同一デバイス内では番号が連続して割り当てられる）
+    match = re.search(r"(\d+)$", port_info.device)
+    return int(match.group(1)) if match else 0
+
+
+def find_pico_data_port():
+    """
+    接続されている Raspberry Pi Pico（CircuitPython）のデータ用シリアルポートを検索する
+    COM番号が変わっても追従できるよう、VID/PID から自動検出する
+    
+    Returns:
+        str または None: データ用ポート名 (例: "COM5")。見つからない場合は None
+    """
+    candidates = [
+        p for p in serial.tools.list_ports.comports()
+        if p.vid == PICO_VID and p.pid == PICO_PID
+    ]
+    # 同一のPicoが公開するシリアルは コンソール用 と データ用 の2本
+    # インターフェース番号が大きい方（後ろ）がデータ用 (usb_cdc.data)
+    if len(candidates) < 2:
+        return None
+    candidates.sort(key=_port_interface_number)
+    return candidates[-1].device
+
+
+def open_pico():
+    """
+    Picoのデータ用シリアルポートを検出して開く
+    
+    Returns:
+        serial.Serial: 開いたシリアルポート
+    
+    Raises:
+        Exception: Picoが見つからない、またはポートを開けない場合
+    """
+    port_name = find_pico_data_port()
+    if port_name is None:
+        raise RuntimeError(
+            "Picoのデータ用シリアルポートが見つかりません"
+            "（boot.py で usb_cdc.enable(console=True, data=True) を設定し、USBを抜き差ししてください）"
+        )
+    pico = serial.Serial(port_name, PICO_BAUDRATE, timeout=1, write_timeout=1)
+    tprint(f"Picoのデータ用ポート {port_name} を開きました")
+    return pico
+
+
+def reconnect_pico(pico):
+    """
+    送信失敗時にPicoへ再接続する（接続できなければ現在のオブジェクトをそのまま返す）
+    
+    Args:
+        pico (serial.Serial): 現在のシリアルポート
+    
+    Returns:
+        serial.Serial: 再接続したシリアルポート（失敗時は元のオブジェクト）
+    """
+    try:
+        pico.close()
+    except Exception:
+        pass
+    try:
+        return open_pico()
+    except Exception as e:
+        tprint(f"⚠ Picoへの再接続に失敗しました（次回の送信時に再試行）: {e}")
+        return pico
+
+
+def send_number(pico, number):
+    """
+    起動時に開いたままのシリアルポートへ数字を1文字送信する
+    （毎回の接続・切断を避けるため、ポートの開閉はここでは行わない）
+    Pico側がUSBキーボードとして該当の数字キーを入力する
+    
+    Args:
+        pico (serial.Serial): 開いた状態のPicoのデータ用シリアルポート
+        number (str): 送信する数字 ('0'～'9' の1文字)
+    """
+    if not pico.is_open:
+        raise RuntimeError("シリアルポートが閉じています")
+    pico.write(number.encode("ascii"))
 
 
 def tprint(message):
@@ -399,12 +484,14 @@ def main():
     # テンプレート画像を事前に読み込み（グレースケール変換済み）
     templates = load_templates(TEMPLATES)
     
-    # 仮想Xboxコントローラーを作成
+    # Raspberry Pi Pico のデータ用シリアルポートを自動検出して開く
+    # 以降は開いたままにして使い回す（毎回の接続・切断による遅延を避ける）
     try:
-        gamepad = vg.VX360Gamepad()
-        tprint("仮想Xboxコントローラーを作成しました")
+        pico = open_pico()
     except Exception as e:
-        tprint(f"エラー: 仮想コントローラーの作成に失敗: {e}")
+        tprint(f"エラー: Picoのシリアルポートを開けませんでした: {e}")
+        tprint("  ・PicoがUSB接続されているか確認してください")
+        tprint("  ・他のソフトが同じポートを使用していないか確認してください")
         return
     
     tprint("=" * 60)
@@ -465,19 +552,20 @@ def main():
                         cv2.imwrite(f"debug_region_{region_index}_{iteration}.png", sub_screen)
                     
                     if result["found"]:
-                        # 見つかったらすぐにボタン押下
-                        if template_path in BUTTON_MAPPING:
-                            button = BUTTON_MAPPING[template_path]
-                            button_name = BUTTON_NAMES.get(button, "不明")
+                        # 見つかったらすぐにPico経由で数字を送信
+                        if template_path in NUMBER_MAPPING:
+                            number = NUMBER_MAPPING[template_path]
                             abs_x = result['location'][0] + region['left']
                             abs_y = result['location'][1] + region['top']
                             try:
-                                press_button(gamepad, button)
-                                tprint(f"範囲{region_index}: {template_path} → {button_name} を押下しました "
+                                send_number(pico, number)
+                                tprint(f"範囲{region_index}: {template_path} → 数字 '{number}' をPicoへ送信しました "
                                        f"(座標: X={abs_x}, Y={abs_y}, 信頼度: {result['confidence']:.2%})")
-                                time.sleep(BUTTON_PRESS_INTERVAL)  # ボタン押下間隔
+                                time.sleep(BUTTON_PRESS_INTERVAL)  # 送信間隔
                             except Exception as e:
-                                tprint(f"範囲{region_index}: {template_path} → {button_name} の押下に失敗: {e}")
+                                tprint(f"範囲{region_index}: {template_path} → 数字 '{number}' の送信に失敗: {e}")
+                                # 切断やCOM番号の変更に備えて再接続を試みる
+                                pico = reconnect_pico(pico)
                         # この範囲では1つ見つかったら次の範囲へ
                         break
             
@@ -494,6 +582,9 @@ def main():
         tprint(f"\nエラーが発生しました: {e}")
         import traceback
         traceback.print_exc()
+    
+    finally:
+        pico.close()
 
 
 if __name__ == "__main__":
