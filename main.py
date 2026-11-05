@@ -239,14 +239,10 @@ def _port_interface_number(port_info):
         port_info: serial.tools.list_ports の ListPortInfo
     
     Returns:
-        int: インターフェース番号。取得できない場合は COM番号で代用
+        int: インターフェース番号。取得できない場合は 0（コンソール側とみなす）
     """
     # pyserial(Windows) は複合デバイスの location に ":x.<インターフェース番号>" を付ける
     match = re.search(r":x\.(\d+)", port_info.location or "")
-    if match:
-        return int(match.group(1))
-    # 取得できない場合は、COM番号の大小で代用（同一デバイス内では番号が連続して割り当てられる）
-    match = re.search(r"(\d+)$", port_info.device)
     return int(match.group(1)) if match else 0
 
 
