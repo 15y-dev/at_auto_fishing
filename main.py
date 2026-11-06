@@ -9,10 +9,6 @@ import numpy as np
 import mss
 import time
 import ctypes
-import sys
-import re
-import serial
-import serial.tools.list_ports
 import win32gui
 import win32process
 import win32api
@@ -58,16 +54,7 @@ SEARCH_REGIONS_RELATIVE = [
 # テンプレート画像のリスト
 TEMPLATES = ['01.png', '02.png', '03.png', '04.png']
 
-# Raspberry Pi Pico（CircuitPython）の検出設定
-# COM番号は環境によって変わるため固定せず、USBのVID/PIDから実行時に自動検出する
-# （CircuitPython の Raspberry Pi Pico: VID=0x239A / PID=0x80F4）
-PICO_VID = 0x239A
-PICO_PID = 0x80F4
-# 接続を試みるシリアルのボーレート（USB CDCでは実質無視されるがpyserialの引数として必要）
-PICO_BAUDRATE = 115200
-
-# 送信する数字のマッピング（テンプレート名 → Picoへ送る数字 '0'～'9' の1文字）
-# Pico側がこの数字をUSBキーボード入力としてPCに送信する（pico/code.py）
+# 送信する数字のマッピング（テンプレート名 → 入力する数字 '0'～'9' の1文字）
 NUMBER_MAPPING = {
     '01.png': '1',
     '02.png': '2',
@@ -84,6 +71,10 @@ INTERVAL = 1.0
 # ボタン押下間隔（秒）
 BUTTON_PRESS_INTERVAL = 0.1
 
+# キーを押してから離すまでの時間（秒）
+# 短すぎると、対象プログラム側の入力ポーリング間隔によっては取りこぼされる
+KEY_PRESS_DURATION = 0.05
+
 
 # デバッグモード（Trueにすると詳細情報を表示）
 DEBUG = False
@@ -93,6 +84,124 @@ DEBUG = False
 # mssインスタンスはプログラム実行時に1回だけ生成し、グローバル変数で保持する
 # （毎フレーム生成すると生成コストがかかるため）
 _sct = None
+
+
+# ==================== キー入力 (SendInput) ====================
+
+INPUT_KEYBOARD = 1
+KEYEVENTF_KEYUP = 0x0002
+KEYEVENTF_SCANCODE = 0x0008
+
+# 数字キー（キーボード最上段）のスキャンコード
+# 仮想キーコードではなくスキャンコードで送る。より低レベルな表現であり、
+# DirectInput のようにスキャンコードを直接見るプログラムでも認識されやすいため。
+SCAN_CODES = {
+    '1': 0x02, '2': 0x03, '3': 0x04, '4': 0x05, '5': 0x06,
+    '6': 0x07, '7': 0x08, '8': 0x09, '9': 0x0A, '0': 0x0B,
+}
+
+# dwExtraInfo は ULONG_PTR（64bitでは8バイト）。
+# wintypes に ULONG_PTR は無いため、同じ幅を持つ WPARAM を使う。
+_ULONG_PTR = wintypes.WPARAM
+
+
+class _MOUSEINPUT(ctypes.Structure):
+    _fields_ = [
+        ("dx", wintypes.LONG),
+        ("dy", wintypes.LONG),
+        ("mouseData", wintypes.DWORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", _ULONG_PTR),
+    ]
+
+
+class _KEYBDINPUT(ctypes.Structure):
+    _fields_ = [
+        ("wVk", wintypes.WORD),
+        ("wScan", wintypes.WORD),
+        ("dwFlags", wintypes.DWORD),
+        ("time", wintypes.DWORD),
+        ("dwExtraInfo", _ULONG_PTR),
+    ]
+
+
+class _HARDWAREINPUT(ctypes.Structure):
+    _fields_ = [
+        ("uMsg", wintypes.DWORD),
+        ("wParamL", wintypes.WORD),
+        ("wParamH", wintypes.WORD),
+    ]
+
+
+class _INPUT(ctypes.Structure):
+    """
+    Win32 の INPUT 構造体。
+
+    キーボードしか使わない場合でも、共用体には MOUSEINPUT を必ず含めること。
+    MOUSEINPUT が最大メンバーであり、これを省くと sizeof(INPUT) が
+    64bit環境で 40 バイトではなく 32 バイトになってしまう。
+    SendInput は cbSize が一致しないと ERROR_INVALID_PARAMETER(87) で失敗する。
+    """
+
+    class _UNION(ctypes.Union):
+        _fields_ = [
+            ("mi", _MOUSEINPUT),
+            ("ki", _KEYBDINPUT),
+            ("hi", _HARDWAREINPUT),
+        ]
+
+    _anonymous_ = ("u",)
+    _fields_ = [("type", wintypes.DWORD), ("u", _UNION)]
+
+
+def _send_scancode(scan_code, key_up):
+    """
+    スキャンコードを1つ SendInput で送る
+
+    Args:
+        scan_code (int): 送信するスキャンコード
+        key_up (bool): True なら離す、False なら押す
+
+    Raises:
+        RuntimeError: SendInput が失敗した場合
+    """
+    flags = KEYEVENTF_SCANCODE | (KEYEVENTF_KEYUP if key_up else 0)
+    # KEYEVENTF_SCANCODE 指定時、wVk は無視され wScan のみが参照される
+    event = _INPUT(
+        type=INPUT_KEYBOARD,
+        ki=_KEYBDINPUT(wVk=0, wScan=scan_code, dwFlags=flags, time=0, dwExtraInfo=0),
+    )
+    sent = ctypes.windll.user32.SendInput(1, ctypes.byref(event), ctypes.sizeof(_INPUT))
+    if sent != 1:
+        error_code = ctypes.windll.kernel32.GetLastError()
+        raise RuntimeError(
+            f"SendInputが失敗しました (GetLastError={error_code})。"
+            "対象プログラムが管理者権限で動作している場合、"
+            "こちらも管理者権限で実行する必要があります（run_admin.bat）"
+        )
+
+
+def send_number(number):
+    """
+    数字キーの押下・解放を送る
+
+    Args:
+        number (str): 送信する数字 ('0'～'9' の1文字)
+
+    Raises:
+        ValueError: 数字以外が指定された場合
+        RuntimeError: SendInput が失敗した場合
+    """
+    scan_code = SCAN_CODES.get(number)
+    if scan_code is None:
+        raise ValueError(f"送信できない文字です: {number!r}")
+    _send_scancode(scan_code, key_up=False)
+    time.sleep(KEY_PRESS_DURATION)
+    _send_scancode(scan_code, key_up=True)
+
+
+# ==============================================================
 
 
 def capture_screen(region):
@@ -230,99 +339,6 @@ def load_templates(template_paths):
     return templates
 
 
-def _port_interface_number(port_info):
-    """
-    複合USBデバイスのシリアルポートについて、USBインターフェース番号を取得する
-    （CircuitPython では コンソール < データ の順に番号が割り当てられる）
-    
-    Args:
-        port_info: serial.tools.list_ports の ListPortInfo
-    
-    Returns:
-        int: インターフェース番号。取得できない場合は 0（コンソール側とみなす）
-    """
-    # pyserial(Windows) は複合デバイスの location に ":x.<インターフェース番号>" を付ける
-    match = re.search(r":x\.(\d+)", port_info.location or "")
-    return int(match.group(1)) if match else 0
-
-
-def find_pico_data_port():
-    """
-    接続されている Raspberry Pi Pico（CircuitPython）のデータ用シリアルポートを検索する
-    COM番号が変わっても追従できるよう、VID/PID から自動検出する
-    
-    Returns:
-        str または None: データ用ポート名 (例: "COM5")。見つからない場合は None
-    """
-    candidates = [
-        p for p in serial.tools.list_ports.comports()
-        if p.vid == PICO_VID and p.pid == PICO_PID
-    ]
-    # 同一のPicoが公開するシリアルは コンソール用 と データ用 の2本
-    # インターフェース番号が大きい方（後ろ）がデータ用 (usb_cdc.data)
-    if len(candidates) < 2:
-        return None
-    candidates.sort(key=_port_interface_number)
-    return candidates[-1].device
-
-
-def open_pico():
-    """
-    Picoのデータ用シリアルポートを検出して開く
-    
-    Returns:
-        serial.Serial: 開いたシリアルポート
-    
-    Raises:
-        Exception: Picoが見つからない、またはポートを開けない場合
-    """
-    port_name = find_pico_data_port()
-    if port_name is None:
-        raise RuntimeError(
-            "Picoのデータ用シリアルポートが見つかりません"
-            "（boot.py で usb_cdc.enable(console=True, data=True) を設定し、USBを抜き差ししてください）"
-        )
-    pico = serial.Serial(port_name, PICO_BAUDRATE, timeout=1, write_timeout=1)
-    tprint(f"Picoのデータ用ポート {port_name} を開きました")
-    return pico
-
-
-def reconnect_pico(pico):
-    """
-    送信失敗時にPicoへ再接続する（接続できなければ現在のオブジェクトをそのまま返す）
-    
-    Args:
-        pico (serial.Serial): 現在のシリアルポート
-    
-    Returns:
-        serial.Serial: 再接続したシリアルポート（失敗時は元のオブジェクト）
-    """
-    try:
-        pico.close()
-    except Exception:
-        pass
-    try:
-        return open_pico()
-    except Exception as e:
-        tprint(f"⚠ Picoへの再接続に失敗しました（次回の送信時に再試行）: {e}")
-        return pico
-
-
-def send_number(pico, number):
-    """
-    起動時に開いたままのシリアルポートへ数字を1文字送信する
-    （毎回の接続・切断を避けるため、ポートの開閉はここでは行わない）
-    Pico側がUSBキーボードとして該当の数字キーを入力する
-    
-    Args:
-        pico (serial.Serial): 開いた状態のPicoのデータ用シリアルポート
-        number (str): 送信する数字 ('0'～'9' の1文字)
-    """
-    if not pico.is_open:
-        raise RuntimeError("シリアルポートが閉じています")
-    pico.write(number.encode("ascii"))
-
-
 def tprint(message):
     """
     タイムスタンプ付きでprint
@@ -449,6 +465,8 @@ def main():
     _sct = mss.mss()
     
     # 管理者権限チェック
+    # 対象プログラムが管理者権限で動作している場合、UIPI により
+    # 低い整合性レベルのプロセスからは入力を送れない
     if is_admin():
         tprint("✓ 管理者権限で実行中")
     else:
@@ -479,16 +497,6 @@ def main():
     
     # テンプレート画像を事前に読み込み（グレースケール変換済み）
     templates = load_templates(TEMPLATES)
-    
-    # Raspberry Pi Pico のデータ用シリアルポートを自動検出して開く
-    # 以降は開いたままにして使い回す（毎回の接続・切断による遅延を避ける）
-    try:
-        pico = open_pico()
-    except Exception as e:
-        tprint(f"エラー: Picoのシリアルポートを開けませんでした: {e}")
-        tprint("  ・PicoがUSB接続されているか確認してください")
-        tprint("  ・他のソフトが同じポートを使用していないか確認してください")
-        return
     
     tprint("=" * 60)
     tprint(f"検索を開始します... (Ctrl+C で中断)")
@@ -548,20 +556,19 @@ def main():
                         cv2.imwrite(f"debug_region_{region_index}_{iteration}.png", sub_screen)
                     
                     if result["found"]:
-                        # 見つかったらすぐにPico経由で数字を送信
+                        # 見つかったらすぐに数字キーを送信
                         if template_path in NUMBER_MAPPING:
                             number = NUMBER_MAPPING[template_path]
                             abs_x = result['location'][0] + region['left']
                             abs_y = result['location'][1] + region['top']
                             try:
-                                send_number(pico, number)
-                                tprint(f"範囲{region_index}: {template_path} → 数字 '{number}' をPicoへ送信しました "
+                                send_number(number)
+                                tprint(f"範囲{region_index}: {template_path} → 数字 '{number}' を送信しました "
                                        f"(座標: X={abs_x}, Y={abs_y}, 信頼度: {result['confidence']:.2%})")
                                 time.sleep(BUTTON_PRESS_INTERVAL)  # 送信間隔
                             except Exception as e:
                                 tprint(f"範囲{region_index}: {template_path} → 数字 '{number}' の送信に失敗: {e}")
-                                # 切断やCOM番号の変更に備えて再接続を試みる
-                                pico = reconnect_pico(pico)
+
                         # この範囲では1つ見つかったら次の範囲へ
                         break
             
@@ -578,9 +585,6 @@ def main():
         tprint(f"\nエラーが発生しました: {e}")
         import traceback
         traceback.print_exc()
-    
-    finally:
-        pico.close()
 
 
 if __name__ == "__main__":

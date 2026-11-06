@@ -56,53 +56,60 @@ INTERVAL = 1.0
 ### 3. 実行方法
 
 
-#### 方法A: 通常実行
-```bash
-run.bat
-```
-ダブルクリックで実行できます。
-
-#### 方法B: 管理者権限で実行（推奨）
+#### 管理者権限で実行（推奨）
 ```bash
 run_admin.bat
 ```
 ダブルクリックすると自動的に管理者権限で起動します。
 
+**対象プログラムが管理者権限で動作している場合、管理者権限は必須です。**
+UIPI（User Interface Privilege Isolation）により、低い整合性レベルのプロセスからは
+入力を送れないためです。
+
 ### 4. 停止方法
 
 プログラムを途中で停止したい場合は、`Ctrl + C` を押してください。
 
-## 🎮 数字の送信（Raspberry Pi Pico）
+## 🎮 数字キーの送信
 
 テンプレートが見つかると、`NUMBER_MAPPING` に従った数字（`01.png`→`1` … `04.png`→`4`）を
-Raspberry Pi Pico のデータ用USBシリアルへ送信します。Pico は受け取った数字を
-USBキーボードの数字キー入力としてPCへ送ります（`pico/code.py`）。
+`SendInput` API でキー入力として送信します。追加のハードウェアは不要です。
 
-- Pico は CircuitPython で動作し、`boot.py` で `usb_cdc.enable(console=True, data=True)` を設定済みであること
-  （コンソール用とデータ用の2つのCOMポートが見える状態）
-- `pico/code.py` を Pico の `CIRCUITPY` ドライブ直下の `code.py` にコピーしてください
-- COM番号は固定していません。起動時に USB の VID/PID（`PICO_VID` / `PICO_PID`）から
-  Pico のデータ用ポート（2本のうちインターフェース番号が大きい方）を自動検出します
-- シリアルポートは起動時に1回だけ開き、開いたまま使い回します（毎回の接続・切断による遅延を避けるため）。
-  送信に失敗した場合のみ再検出して再接続します
+- 仮想キーコードではなく**スキャンコード**（`KEYEVENTF_SCANCODE`）で送信します。
+  より低レベルな表現であり、DirectInput のようにスキャンコードを直接参照する
+  プログラムでも認識されやすいためです
 - 送信する数字を変えたい場合は `main.py` の `NUMBER_MAPPING` を編集してください
+- キーの押下時間は `KEY_PRESS_DURATION`（既定 0.05 秒）で調整します。
+  対象プログラムの入力ポーリング間隔によって取りこぼされる場合は長くしてください
+
+### 動作確認
+
+キー入力がOSに届いているかは、以下で確認できます。
+
+```bash
+python test_sendinput.py
+```
+
+`GetAsyncKeyState` で押下を検出するため、メモ帳を開いたりウィンドウを
+切り替えたりする必要はありません。
+
 
 ## 📁 ファイル構成
 
 ```
 at_auto_fishing/
 ├── main.py              # メインプログラム
-├── run.bat              # 通常起動スクリプト
 ├── run_admin.bat        # 管理者権限起動スクリプト
-├── pico/code.py         # Pico用プログラム（受信した数字をUSBキーボード入力に変換）
-├── pico/blink_backup.py # Picoに元々入っていたLED点滅プログラムのバックアップ
+├── test_sendinput.py    # キー入力が動作するか確認するスクリプト
 ├── requirements.txt     # 必要なライブラリ一覧
 ├── README.md            # このファイル
+├── TROUBLESHOOTING.md   # トラブルシューティング
 ├── 01.png               # テンプレート画像1
 ├── 02.png               # テンプレート画像2
 ├── 03.png               # テンプレート画像3
 ├── 04.png               # テンプレート画像4
 └── .venv/               # Python仮想環境
+
 ```
 
 ## ⚙️ 設定項目の説明
@@ -176,13 +183,24 @@ at_auto_fishing/
 ### 画面キャプチャができない場合
 - 管理者権限で実行してみる（`run_admin.bat` を使用）
 
+### キー入力が届かない場合
+1. `run_admin.bat` で管理者権限で起動する（対象プログラムが管理者権限で
+   動作している場合は必須）
+2. `python test_sendinput.py` でOSに届いているか切り分ける
+
+詳しくは [TROUBLESHOOTING.md](TROUBLESHOOTING.md) を参照してください。
+
 ## 📝 必要なライブラリ
 
 - `opencv-python`: 画像処理・テンプレートマッチング
 - `numpy`: 数値計算
 - `mss`: 高速スクリーンキャプチャ
 - `Pillow`: 画像処理補助
-- `pyserial`: Raspberry Pi Pico とのUSBシリアル通信
+- `pywin32`: ウィンドウ検索・座標取得
+
+キー入力の送信には Windows の `SendInput` API を直接使うため、
+追加のライブラリは不要です（`ctypes` で呼び出しています）。
+
 
 ## 📄 ライセンス
 

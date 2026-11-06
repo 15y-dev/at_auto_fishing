@@ -5,4 +5,3 @@ Pillow
 pywin32
 vgamepad
 flask
-pyserial
