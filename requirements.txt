@@ -1,7 +1,4 @@
 opencv-python
 numpy
 mss
-Pillow
 pywin32
-vgamepad
-flask
